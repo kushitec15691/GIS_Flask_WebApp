@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>GIS Web Application</title>
+
+    <!-- ==================== Stylesheets ==================== -->
+    <!-- Leaflet core and plugins (loaded from Flask static folder) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='src/leaflet.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='src/css/bootstrap.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='src/plugins/L.Control.Zoomslider.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='src/plugins/L.Control.Sidebar.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='dist/MarkerCluster.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='dist/MarkerCluster.Default.css') }}">
+
+    <!-- Third-party plugin styles -->
+    <link rel="stylesheet" href="https://ppete2.github.io/Leaflet.PolylineMeasure/Leaflet.PolylineMeasure.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <!-- ==================== JavaScript Libraries ==================== -->
+    <!-- Leaflet core and plugins -->
+    <script src="{{ url_for('static', filename='src/leaflet-src.js') }}"></script>
+    <script src="{{ url_for('static', filename='src/jquery-3.6.0.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='src/turf.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='src/plugins/L.Control.Zoomslider.js') }}"></script>
+    <script src="{{ url_for('static', filename='src/plugins/L.Control.Sidebar.js') }}"></script>
+    <script src="{{ url_for('static', filename='src/leaflet.markercluster.js') }}"></script>
+
+    <!-- External plugin script (polyline measure) -->
+    <script src="https://ppete2.github.io/Leaflet.PolylineMeasure/Leaflet.PolylineMeasure.js"></script>
+
+    <!-- Project-specific GeoJSON/JS data -->
+    <script src="{{ url_for('static', filename='supermarket.js') }}"></script>
+    <script src="{{ url_for('static', filename='fuel.js') }}"></script>
+    <script src="{{ url_for('static', filename='school_locations.js') }}"></script>
+
+
+
+    <!-- ==================== Page-specific Styling ==================== -->
+    <style>
+        /* Full screen map container */
+        #mapdiv {
+            height: 100vh;
+        }
+
+        /* Sidebar styling */
+        #side-bar {
+            position: absolute;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            right: 0;
+            top: 0;
+            margin: 10px;
+            border-radius: 10px;
+            min-height: 200px;
+        }
+    </style>
+</head>
+
+
+
+<body>
+
+    <!-- ==================== Main Map Container ==================== -->
+    <div id="mapdiv" class="col-md-9"></div>
+
+    <!-- ==================== Task Buttons Sidebar ==================== -->
+    <div id="side-bar" class="col-md-3">
+        <h2>My Map</h2>
+        <button id="btnTask1" class="btn btn-success btn-block">Task 1: Features</button>
+        <button id="btnTask2" class="btn btn-warning btn-block">Task 2: Schools in Borlänge</button>
+        <button id="btnTask3" class="btn btn-info btn-block">Task 3: Supermarkets & Buffers</button>
+        <button id="btnTask4" class="btn btn-dark btn-block">Task 4: Image Overlay</button>
+        <button id="btnTask5" class="btn btn-secondary btn-block">Task 5: Fuel Stations (Cluster)</button>
+        <button id="btnTask6" class="btn btn-primary btn-block">Task 6: Weather</button>
+        <button id="btnTask7" class="btn btn-danger btn-block">Task 7: School Clusters</button>
+    </div>
+
+    <!-- ==================== School Info Sidebar ==================== -->
+    <div id="sidebar" class="leaflet-sidebar collapsed">
+        <!-- School sidebar only -->
+        <div class="leaflet-sidebar-tabs">
+            <ul role="tablist">
+                <li><a href="#home" role="tab"><i class="fa fa-school"></i></a></li>
+            </ul>
+        </div>
+        <div class="leaflet-sidebar-content">
+            <div class="leaflet-sidebar-pane" id="home">
+                <h1 class="leaflet-sidebar-header">
+                    School Info
+                    <span class="leaflet-sidebar-close"><i class="fa fa-times"></i></span>
+                </h1>
+                <div id="sidebar-content">Click a school to view details.</div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ==================== Weather Sidebar ==================== -->
+    <div id="weather-sidebar" style="
+    position: absolute;
+    top: 80px;
+    left: 10px;
+    z-index: 9999;
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    width: 250px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    display: none;">
+        <h4>Weather Info</h4>
+        <div id="weather-content">Click a city marker to see weather details.</div>
+    </div>
+
+
+    <script>
+
+        // ========== Global Leaflet Map Variables ==========
+        let mymap, lyrOSM, ctlZoomslider;
+        let pointLayer, lineLayer, polygonLayer;
+        let overlayImage;
+        let supermarketLayer, bufferLayer;
+
+
+        // ========== Document Ready ========== 
+        $(document).ready(function () {
+            // ==================== Map Initialization ====================
+
+            // 1. Create the Leaflet map instance and center it at Borlänge with zoom level 13
+            mymap = L.map('mapdiv', {
+                center: [60.4887, 15.4214], // Latitude, Longitude of Borlänge
+                zoom: 13                    // Initial zoom level
+            });
+
+            // 2. Add OpenStreetMap basemap layer to the map
+            lyrOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mymap);
+
+            // 3. Add zoom slider control to the top right corner
+            ctlZoomslider = L.control.zoomslider({
+                position: 'topright'
+            }).addTo(mymap);
+
+            // 4. Add the sidebar control and attach it to the map
+            const sidebar = L.control.sidebar('sidebar', {
+                position: 'left' // Sidebar appears from the left side
+            }).addTo(mymap);
+
+
+
+        // ==================== Task 1: Display Static Features ====================
+        let task1Visible = false;
+        $("#btnTask1").click(function () {
+            if (!task1Visible) {
+                // 1. Add a marker for Dalarna University with image popup
+                pointLayer = L.marker([60.4853, 15.4311]).addTo(mymap)
+                    .bindPopup(`
+                <b>Dalarna University: Most Modern Campus in Sweden.</b><br>
+                <img src="{{ url_for('static', filename='img/dalarna_university.jpg') }}" width="150px">
+            `);
+
+                // 2. Add a polyline representing Röda vägen street with image
+                lineLayer = L.polyline(
+                    [
+                        [60.4877, 15.4149],
+                        [60.4900, 15.4211],
+                        [60.4907, 15.4232]
+                    ],
+                    { color: 'blue' }
+                ).addTo(mymap).bindPopup(`
+            <b>Röda vägen: Busy road in central Borlange.</b><br>
+            <img src="{{ url_for('static', filename='img/roda_vagen.jpg') }}" width="150px">
+        `);
+
+                // 3. Add a polygon showing the area of IKEA with image
+                polygonLayer = L.polygon(
+                    [
+                        [60.4825, 15.4203],
+                        [60.4810, 15.4196],
+                        [60.4807, 15.4219],
+                        [60.4822, 15.4227]
+                    ],
+                    { color: 'green' }
+                ).addTo(mymap).bindPopup(`
+            <b>IKEA store: Home for your shopping needs.</b><br>
+            <img src="{{ url_for('static', filename='img/ikea.png') }}" width="150px">
+        `);
+
+                task1Visible = true;
+            } else {
+                // 4. Remove the features if already added
+                if (pointLayer) mymap.removeLayer(pointLayer);
+                if (lineLayer) mymap.removeLayer(lineLayer);
+                if (polygonLayer) mymap.removeLayer(polygonLayer);
+                task1Visible = false;
+            }
+        });
+
+
+
+        // ==================== Task 2: Schools in Borlange ====================
+        const schools = [
+            { name: "Maserskolan", latlng: [60.4846, 15.4362], students: 620, info: "Grades 1–9. Central location with new facilities." },
+            { name: "Forssaklackskolan", latlng: [60.4840, 15.4149], students: 540, info: "Known for sports and music profile." },
+            { name: "Tjärnaängskolan", latlng: [60.4871, 15.4169], students: 470, info: "Focuses on multicultural education." },
+            { name: "Kvarnsvedens Skola", latlng: [60.5116, 15.4081], students: 350, info: "Popular in the north of Borlänge." },
+            { name: "Gylle Skola", latlng: [60.4741, 15.4502], students: 390, info: "Active in community-based learning." }
+        ];
+
+        let task2Visible = false;
+        let schoolMarkers = [];
+        let polyMeasureControl;
+
+        $("#btnTask2").click(function () {
+            if (!task2Visible) {
+                // Add markers for each school
+                schools.forEach(school => {
+                    const marker = L.marker(school.latlng).addTo(mymap);
+                    marker.on("click", () => {
+                        $("#sidebar-content").html(`
+                    <h2>${school.name}</h2>
+                    <p><strong>Students:</strong> ${school.students}</p>
+                    <p>${school.info}</p>
+                `);
+                        sidebar.show();
+                    });
+                    schoolMarkers.push(marker);
+                });
+
+                // Add PolylineMeasure control
+                polyMeasureControl = L.control.polylineMeasure({
+                    position: 'topleft',
+                    unit: 'kilometres',
+                    showBearings: true,
+                    clearMeasurementsOnStop: false,
+                    showClearControl: true,
+                    showUnitControl: true
+                }).addTo(mymap);
+
+                // Convert school coords to {lat, lng} format for seed
+                const coords = schools.map(s => ({ lat: s.latlng[0], lng: s.latlng[1] }));
+                polyMeasureControl.seed([coords]);  // Use seed to draw automatically
+
+                // Fit to bounds
+                const group = new L.featureGroup(schoolMarkers);
+                mymap.fitBounds(group.getBounds().pad(0.2));
+
+                task2Visible = true;
+            } else {
+                // Remove all markers
+                schoolMarkers.forEach(marker => mymap.removeLayer(marker));
+                schoolMarkers = [];
+
+                // Remove the polylineMeasure control and lines
+                if (polyMeasureControl && polyMeasureControl.remove) {
+                    polyMeasureControl._clearAllMeasurements();
+                    polyMeasureControl.remove();
+                    polyMeasureControl = null;
+                }
+
+                sidebar.hide();
+                $("#sidebar-content").html("Click a school to view details.");
+                task2Visible = false;
+            }
+        });
+
+
+
+
+
+        // ==================== Task 3: Supermarkets & 1km Buffers ====================
+        let task3Visible = false;         // Visibility flag
+        $("#btnTask3").click(function () {
+            if (!task3Visible) {
+                //  Load supermarket GeoJSON and plot points
+                supermarketLayer = L.geoJSON(supermarket, {
+                    pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+                        radius: 6,
+                        fillColor: "#3388ff",
+                        color: "#000",
+                        weight: 1,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    }),
+                    onEachFeature: (feature, layer) => {
+                        const name = feature.properties.name || "Unnamed Supermarket";
+                        layer.bindPopup(`<b>${name}</b>`);
+                    }
+                }).addTo(mymap);
+
+                //  Create 1km buffers around each supermarket
+                const buffers = supermarket.features.map((feature, index) => {
+                    const buffer = turf.buffer(feature, 1, { units: "kilometers" });
+                    buffer.properties.index = index;
+                    buffer.properties.name = feature.properties.name;
+                    return buffer;
+                });
+
+                //  Identify overlapping buffers
+                const overlapping = new Set();
+                for (let i = 0; i < buffers.length; i++) {
+                    for (let j = i + 1; j < buffers.length; j++) {
+                        if (turf.booleanOverlap(buffers[i], buffers[j])) {
+                            overlapping.add(i);
+                            overlapping.add(j);
+                        }
+                    }
+                }
+
+                // Draw buffer polygons and style based on overlap
+                bufferLayer = L.geoJSON(buffers, {
+                    style: feature => ({
+                        color: overlapping.has(feature.properties.index) ? "red" : "green",
+                        fillOpacity: 0.15,
+                        weight: 2
+                    }),
+                    onEachFeature: (feature, layer) => {
+                        layer.bindTooltip(`<b>${feature.properties.name}</b>`);
+                    }
+                }).addTo(mymap);
+
+                //  Adjust map view
+                const group = new L.featureGroup([supermarketLayer, bufferLayer]);
+                mymap.fitBounds(group.getBounds().pad(0.2));
+
+                task3Visible = true;
+            } else {
+                //  Remove supermarket and buffer layers
+                if (supermarketLayer) mymap.removeLayer(supermarketLayer);
+                if (bufferLayer) mymap.removeLayer(bufferLayer);
+                task3Visible = false;
+            }
+        });
+
+        // ==================== Task 4: Image Overlay ====================
+        let task4Visible = false;         // Visibility flag
+        $("#btnTask4").click(function () {
+            if (!task4Visible) {
+                //  Define the geographical bounds where the image will be displayed
+                const imageBounds = [
+                    [60.6020, 15.6210], // Southwest corner
+                    [60.6090, 15.6360]  // Northeast corner
+                ];
+
+                //  Add the image overlay (static image from Flask static folder)
+                overlayImage = L.imageOverlay(
+                    "{{ url_for('static', filename='img/falun.png') }}",
+                    imageBounds
+                ).addTo(mymap);
+
+                //  Zoom the map to fit the image bounds
+                mymap.fitBounds(imageBounds);
+
+                task4Visible = true;
+            } else {
+                //  Remove the image overlay from the map
+                if (overlayImage) mymap.removeLayer(overlayImage);
+                task4Visible = false;
+            }
+        });
+
+
+        // ==================== Task 5: Fuel Stations (Cluster) ====================
+        let task5Visible = false;      // Visibility flag
+        let fuelCluster;               // Cluster group for fuel station markers
+
+        $("#btnTask5").click(function () {
+            if (!task5Visible) {
+                // Initialize a new marker cluster group
+                fuelCluster = L.markerClusterGroup();
+
+                //  Load fuel station GeoJSON data and add to cluster group
+                L.geoJSON(fuel, {
+                    // Add popup to each fuel station
+                    onEachFeature: function (feature, layer) {
+                        const name = feature.properties.name || "Fuel Station";
+                        layer.bindPopup(`<b>${name}</b>`);
+                    },
+                    // Convert each GeoJSON point to a Leaflet marker
+                    pointToLayer: function (feature, latlng) {
+                        return L.marker(latlng);
+                    }
+                }).eachLayer(layer => fuelCluster.addLayer(layer));
+
+                //  Add clustered fuel stations to map
+                mymap.addLayer(fuelCluster);
+
+                //  Adjust map to fit all fuel stations
+                mymap.fitBounds(fuelCluster.getBounds().pad(0.2));
+
+                task5Visible = true;
+            } else {
+                //  Remove fuel station cluster group from map
+                if (fuelCluster) {
+                    mymap.removeLayer(fuelCluster);
+                    fuelCluster.clearLayers();
+                }
+                task5Visible = false;
+            }
+        });
+
+
+
+        // ==================== Task 6: Weather ====================
+        let task6Visible = false;         // Visibility flag
+        let weatherMarkers = [];          // Array to store weather markers
+        const weatherApiKey = "6d4216b445a63335ae98e705153c05ba"; // OpenWeatherMap API Key
+
+        $("#btnTask6").click(function () {
+            if (!task6Visible) {
+                //  Define cities to display weather for
+                const cities = [
+                    { name: "Stockholm", lat: 59.3293, lon: 18.0686 },
+                    { name: "Gothenburg", lat: 57.7089, lon: 11.9746 },
+                    { name: "Malmö", lat: 55.6050, lon: 13.0038 },
+                    { name: "Uppsala", lat: 59.8586, lon: 17.6389 },
+                    { name: "Falun", lat: 60.6078, lon: 15.6350 }
+                ];
+
+                let loadedCount = 0; // Counter to know when all cities are loaded
+
+                cities.forEach(city => {
+                    const currentUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&units=metric&appid=${weatherApiKey}`;
+                    const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?lat=${city.lat}&lon=${city.lon}&units=metric&appid=${weatherApiKey}`;
+
+                    //  Fetch current weather data
+                    $.getJSON(currentUrl, function (currentData) {
+                        const icon = `https://openweathermap.org/img/wn/${currentData.weather[0].icon}@2x.png`;
+                        const popupContent = `
+                    <b>${city.name}</b><br>
+                    <img src="${icon}" width="50" /><br>
+                    ${currentData.weather[0].main} - ${currentData.weather[0].description}<br>
+                    Temp: ${currentData.main.temp}°C<br>
+                    Feels like: ${currentData.main.feels_like}°C<br>
+                    Humidity: ${currentData.main.humidity}%<br>
+                    Wind: ${currentData.wind.speed} m/s
+                `;
+
+                        //  Add city marker with current weather popup
+                        const marker = L.marker([city.lat, city.lon])
+                            .addTo(mymap)
+                            .bindPopup(popupContent);
+                        weatherMarkers.push(marker);
+
+                        //  Fetch forecast when marker is clicked
+                        marker.on("click", function () {
+                            $.getJSON(forecastUrl, function (forecastData) {
+                                let forecastHtml = `<h4>${city.name} - 3 Day Forecast</h4>`;
+                                const shownDates = new Set();
+                                let dayCount = 0;
+
+                                forecastData.list.forEach(item => {
+                                    const date = item.dt_txt.split(" ")[0];
+                                    if (!shownDates.has(date) && dayCount < 3) {
+                                        const icon = item.weather[0].icon;
+                                        forecastHtml += `
+                                    <p>
+                                        <b>${date}</b><br>
+                                        <img src="https://openweathermap.org/img/wn/${icon}.png" width="30" />
+                                        ${item.weather[0].description}<br>
+                                        Min: ${item.main.temp_min}°C, Max: ${item.main.temp_max}°C
+                                    </p>
+                                `;
+                                        shownDates.add(date);
+                                        dayCount++;
+                                    }
+                                });
+
+                                // Show forecast in sidebar
+                                $("#weather-content").html(forecastHtml);
+                                $("#weather-sidebar").fadeIn();
+                            });
+                        });
+
+                        //  Fit map once all cities are loaded
+                        loadedCount++;
+                        if (loadedCount === cities.length) {
+                            const group = new L.featureGroup(weatherMarkers);
+                            mymap.fitBounds(group.getBounds().pad(0.2));
+                            task6Visible = true;
+                        }
+                    });
+                });
+
+            } else {
+                //  Remove weather markers and hide forecast panel
+                weatherMarkers.forEach(marker => mymap.removeLayer(marker));
+                weatherMarkers = [];
+                $("#weather-content").html("Click a marker to load forecast...");
+                $("#weather-sidebar").hide();
+                task6Visible = false;
+            }
+        });
+
+        // ==================== Task 7: School Clusters ====================
+        let task7Visible = false;                 // Toggle flag for task 7
+        let clusteredSchoolMarkers = [];         // Array to hold clustered markers
+
+        $("#btnTask7").click(function () {
+            if (!task7Visible) {
+                // Step 1: Ensure each feature has a geometry object
+                school_locations.features.forEach(f => {
+                    if (!f.geometry && f.properties.xcoord && f.properties.ycoord) {
+                        f.geometry = {
+                            type: "Point",
+                            coordinates: [parseFloat(f.properties.xcoord), parseFloat(f.properties.ycoord)]
+                        };
+                    }
+                });
+
+                // Step 2: Convert coordinates to [lat, lng] format for clustering
+                const coords = school_locations.features.map(f => [
+                    f.geometry.coordinates[1], // lat
+                    f.geometry.coordinates[0]  // lng
+                ]);
+
+                // Step 3: Apply K-means clustering (3 clusters)
+                const k = 3;
+                const { clusters } = kmeans(coords, k);
+                const colors = ["red", "green", "blue"];
+
+                // Step 4: Create color-coded circle markers based on cluster assignment
+                school_locations.features.forEach((feature, i) => {
+                    const lat = feature.geometry.coordinates[1];
+                    const lng = feature.geometry.coordinates[0];
+                    const clusterIndex = clusters[i];
+
+                    const marker = L.circleMarker([lat, lng], {
+                        radius: 6,
+                        fillColor: colors[clusterIndex],
+                        color: "#000",
+                        weight: 1,
+                        opacity: 1,
+                        fillOpacity: 0.9
+                    }).bindPopup(`<b>${feature.properties.Name}</b><br>${feature.properties.descriptio}`)
+                        .addTo(mymap);
+
+                    clusteredSchoolMarkers.push(marker);
+                });
+
+                // Step 5: Adjust map view to include all markers
+                const group = new L.featureGroup(clusteredSchoolMarkers);
+                mymap.fitBounds(group.getBounds().pad(0.2));
+
+                task7Visible = true;
+
+            } else {
+                // Step 6: Clear all clustered markers
+                clusteredSchoolMarkers.forEach(marker => mymap.removeLayer(marker));
+                clusteredSchoolMarkers = [];
+                task7Visible = false;
+            }
+        });
+
+        });
+
+        // ==================== K-Means Clustering ====================
+        // Performs simple K-Means clustering on geographical coordinates
+        function kmeans(data, k) {
+            // Step 1: Initialize first k points as initial centroids
+            let centroids = data.slice(0, k);
+            let clusters = new Array(data.length);
+            let changed = true;
+
+            // Step 2: Repeat until cluster assignments no longer change
+            while (changed) {
+                changed = false;
+
+                // Step 3: Assign each data point to the closest centroid
+                for (let i = 0; i < data.length; i++) {
+                    let minDist = Infinity;
+                    let cluster = 0;
+
+                    for (let j = 0; j < k; j++) {
+                        const dist = distance(data[i], centroids[j]);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            cluster = j;
+                        }
+                    }
+
+                    // If cluster assignment has changed, mark as changed
+                    if (clusters[i] !== cluster) {
+                        clusters[i] = cluster;
+                        changed = true;
+                    }
+                }
+
+                // Step 4: Update centroids to be the mean of their assigned points
+                for (let j = 0; j < k; j++) {
+                    const members = data.filter((_, i) => clusters[i] === j);
+                    if (members.length > 0) {
+                        const avgLat = members.reduce((sum, d) => sum + d[0], 0) / members.length;
+                        const avgLng = members.reduce((sum, d) => sum + d[1], 0) / members.length;
+                        centroids[j] = [avgLat, avgLng];
+                    }
+                }
+            }
+
+            return { centroids, clusters };
+        }
+
+        // ==================== Euclidean Distance Helper ====================
+        // Computes distance between two points [lat, lng]
+        function distance(a, b) {
+            return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+        }
+
+
+    </script>
+</body>
+
+</html>
